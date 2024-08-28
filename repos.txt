@@ -1,0 +1,5 @@
+erlang,https://packages.erlang-solutions.com/ubuntu/
+terraform,https://releases.hashicorp.com/terraform/
+powerdns,https://repo.powerdns.com/
+ubuntu,http://gb.archive.ubuntu.com/ubuntu/
+snapshot,https://snapshot.debian.org/archive/debian-archive/20190328T105444Z/debian-amd64/

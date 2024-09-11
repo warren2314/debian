@@ -1,3 +1,17 @@
 scan.sh
 sbom.sh
 vulns.csv
+download.py
+verification_log.txt
+deb_packages/
+sbom_results/
+trivy_results/
+clamav_results/
+logs/
+warren_cleaned.txt
+sbom_log.txt
+trivy_log.txt
+clamav_log.txt
+download_log.txt
+warren.txt
+warren_cleaned.txt

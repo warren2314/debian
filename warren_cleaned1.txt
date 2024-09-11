@@ -1,2 +1,0 @@
-ubuntu,pool/universe/n/nginx/nginx-full_1.4.6-1ubuntu3.9_amd64.deb
-snapshot,pool/main/o/openssh/ssh-askpass-gnome_3.8.1p1-8.sarge.6_amd64.deb	

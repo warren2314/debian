@@ -1,1 +1,0 @@
-apt,libreoffice=6.4.7.1

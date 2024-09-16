@@ -1,6 +1,1 @@
 apt,libyajl2
-apt,numactl
-apt,collectd
-apt,collectd-core
-apt,collectd-utils
-apt,libcollectdclient1t64

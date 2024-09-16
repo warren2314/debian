@@ -1,37 +1,39 @@
-ARG UBUNTU_VERSION=24.04
-FROM ubuntu:${UBUNTU_VERSION}
+FROM ubuntu:22.04
 
-ENV DEBIAN_FRONTEND=noninteractive
+# Install necessary tools
+RUN apt-get update && apt-get install -y \
+    apt-utils \
+    apt-rdepends \
+    curl \
+    ca-certificates \
+    wget \
+    clamav \
+    python3 \
+    python3-pip \
+    python3-venv \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install necessary dependencies
-RUN apt-get update && \
-    apt-get install --no-install-recommends -y python3-full python3-pip python3-venv apt-rdepends sudo curl clamav && \
-    apt-get clean && \
-    curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh
+# Install Trivy from official sources
+RUN wget https://github.com/aquasecurity/trivy/releases/download/v0.55.1/trivy_0.55.1_Linux-64bit.deb && \
+    dpkg -i trivy_0.55.1_Linux-64bit.deb && \
+    rm trivy_0.55.1_Linux-64bit.deb
 
-# Run freshclam to update ClamAV virus database
-RUN freshclam
+# Ensure Trivy DB update
+RUN trivy image --download-db-only
 
-# Set correct permissions for the app and output directories
-RUN mkdir -p /usr/src/app && chmod -R 777 /usr/src/app && mkdir -p /mnt/output && chmod -R 777 /mnt/output
+# Create necessary directories
+RUN mkdir -p /usr/src/app /mnt/output/deb_packages /mnt/output/sbom_results /mnt/output/trivy_results /mnt/output/logs
 
-# Set up the working directory
-WORKDIR /usr/src/app
-
-# Copy the current directory contents into the container
-COPY . .
-
-# Create a virtual environment and install dependencies
+# Set up a virtual environment
 RUN python3 -m venv /usr/src/app/venv
-RUN /usr/src/app/venv/bin/pip install --no-cache-dir -r requirements.txt
 
-# Set environment variables for output directories
-ENV PATH="/usr/src/app/venv/bin:$PATH"
-ENV DEB_OUTPUT_DIR=/mnt/output/deb_packages
-ENV LOG_OUTPUT_DIR=/mnt/output/logs
+# Activate the virtual environment and install requests
+RUN /usr/src/app/venv/bin/pip install requests
 
-# Define the volume mount for output directories
-VOLUME ["/mnt/output"]
+# Copy Python script
+COPY main.py /usr/src/app/main.py
 
-# Set the default command to run the script
-CMD ["python3", "main.py"]
+# Activate the virtual environment and run the Python script
+WORKDIR /usr/src/app
+CMD ["/usr/src/app/venv/bin/python", "main.py"]

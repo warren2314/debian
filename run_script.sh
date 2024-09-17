@@ -20,4 +20,4 @@ mkdir -p "$output_dir/logs" "$output_dir/deb_packages" "$output_dir/sbom_results
 docker build --build-arg UBUNTU_VERSION=$UBUNTU_VERSION -t download-script .
 
 # Run the Docker container with mounted output directory
-docker run -it --rm -v $(realpath "$output_dir"):/mnt/output download-script
+docker run -it --rm -v "$(pwd)/$output_dir":/mnt/output download-script

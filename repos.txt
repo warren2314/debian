@@ -1,6 +1,6 @@
-erlang,https://packages.erlang-solutions.com/ubuntu/
-terraform,https://releases.hashicorp.com/terraform/
-powerdns,https://repo.powerdns.com/
+erlang,https://packages.erlang-solutions.com/ubuntu/,https://packages.erlang-solutions.com/ubuntu/erlang_solutions.asc
+terraform,https://apt.releases.hashicorp.com,https://apt.releases.hashicorp.com/gpg
+powerdns,https://repo.powerdns.com/ubuntu,https://repo.powerdns.com/FD380FBB-pub.asc
 ubuntu,http://gb.archive.ubuntu.com/ubuntu/
 snapshot,https://snapshot.debian.org/archive/debian-archive/20190328T105444Z/debian-amd64/
-puppet,https://apt.puppetlabs.com/
+puppet,https://apt.puppet.com,https://apt.puppet.com/DEB-GPG-KEY-puppet

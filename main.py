@@ -2,6 +2,7 @@ import os
 import subprocess
 import shutil
 import datetime
+import re
 
 output_dir = "/mnt/output"
 deb_packages_dir = os.path.join(output_dir, "deb_packages")
@@ -50,8 +51,10 @@ def update_package_lists():
         log_message(f"Failed to update package lists: {update_command.stdout.decode()}", download_log_file)
 
 
+import re
+
 def add_repositories():
-    """Adds repositories from repos.txt and handles GPG keys."""
+    """Adds repositories from repos.txt and handles GPG keys securely, supporting custom codenames."""
     if not os.path.exists(repo_list_file):
         log_message(f"Repository list file {repo_list_file} does not exist.", download_log_file)
         return
@@ -59,35 +62,78 @@ def add_repositories():
     with open(repo_list_file, 'r') as f:
         repos = [line.strip() for line in f if line.strip() and not line.startswith('#')]
 
+    # Get the system's codename (e.g., 'noble' for Ubuntu 24.04)
+    try:
+        system_codename = subprocess.check_output(["lsb_release", "-cs"], text=True).strip()
+    except subprocess.CalledProcessError as e:
+        log_message(f"Error obtaining Ubuntu codename: {e}", download_log_file)
+        return
+
     for repo_line in repos:
         try:
-            # Expected format: repo_name,repo_url,gpg_key_url
-            parts = repo_line.split(',')
+            # Expected format: repo_name,repo_entry,gpg_key_url[,codename]
+            parts = repo_line.split(',', 3)
             repo_name = parts[0]
-            repo_url = parts[1]
+            repo_entry = parts[1]
             gpg_key_url = parts[2] if len(parts) > 2 else None
+            custom_codename = parts[3] if len(parts) > 3 else system_codename
 
-            log_message(f"Adding repository: {repo_name} ({repo_url})", download_log_file)
+            log_message(f"Adding repository: {repo_name}", download_log_file)
+
+            # Replace '$(lsb_release -cs)' with the appropriate codename
+            repo_entry = repo_entry.replace("$(lsb_release -cs)", custom_codename)
 
             # Add GPG key if provided
+            keyring_path = f"/usr/share/keyrings/{repo_name}-archive-keyring.gpg"
             if gpg_key_url:
                 log_message(f"Adding GPG key for {repo_name} from {gpg_key_url}", download_log_file)
-                subprocess.run(["wget", "-O", f"/usr/share/keyrings/{repo_name}-archive-keyring.gpg", gpg_key_url],
-                               check=True)
-                key_option = f"[signed-by=/usr/share/keyrings/{repo_name}-archive-keyring.gpg]"
+                subprocess.run(["wget", "-O", keyring_path, gpg_key_url], check=True)
             else:
-                key_option = ""
+                log_message(f"No GPG key URL provided for {repo_name}", download_log_file)
+
+            # Modify repo_entry to use the keyring
+            if gpg_key_url:
+                repo_entry = insert_signed_by(repo_entry, keyring_path)
 
             # Create a new sources list file for the repo
             sources_list_file = f"/etc/apt/sources.list.d/{repo_name}.list"
             with open(sources_list_file, 'w') as src_file:
-                src_file.write(f"deb {key_option} {repo_url} $(lsb_release -cs) main\n")
+                src_file.write(f"{repo_entry}\n")
         except Exception as e:
-            log_message(f"Error adding repository {repo_line}: {e}", download_log_file)
+            log_message(f"Error adding repository {repo_name}: {e}", download_log_file)
+
+
+def insert_signed_by(repo_entry, keyring_path):
+    """Inserts the signed-by option into the repo_entry correctly."""
+    # Regular expression to match 'deb', optional options, and the rest
+    match = re.match(r'^(deb(?:-src)?)(\s+\[.*?\])?(\s+\S+.*)$', repo_entry)
+    if match:
+        repo_type = match.group(1)  # 'deb' or 'deb-src'
+        options = match.group(2)    # options in []
+        rest = match.group(3)       # the rest: uri suite components
+
+        if options:
+            # Remove brackets and split options
+            options_content = options.strip()[1:-1].strip()
+            options_list = options_content.split()
+        else:
+            options_list = []
+
+        # Add signed-by option
+        options_list.append(f"signed-by={keyring_path}")
+
+        # Reconstruct options string
+        options_str = f" [ {' '.join(options_list)} ]"
+
+        # Reconstruct the repo_entry
+        return f"{repo_type}{options_str}{rest}"
+    else:
+        # No options present; add signed-by option
+        return f"{repo_type} [signed-by={keyring_path}]{repo_entry[len(repo_type):]}"
 
 
 def download_all_packages():
-    """Download all packages listed in the package list file."""
+    """Download all packages listed in the package list file, allowing specific versions."""
     if not os.path.exists(package_list_file):
         log_message(f"Package list file {package_list_file} does not exist.", download_log_file)
         return
@@ -98,7 +144,7 @@ def download_all_packages():
         for line in f:
             line = line.strip()
             if line and not line.startswith('#'):
-                # Split by commas, first element is repo name, rest are package names
+                # Split by commas, first element is repo name, rest are package names or versions
                 parts = line.split(',')
                 if len(parts) >= 2:
                     repo_name = parts[0]
@@ -108,8 +154,15 @@ def download_all_packages():
                     packages.append(parts[0])  # If no repo specified, just take the package name
 
     for package in packages:
-        log_message(f"Attempting to download package: {package}", download_log_file)
-        download_command = ["apt-get", "download", package]
+        # Check if a version is specified using '=' (e.g., postgresql-15=15.3-1.pgdg22.04+1)
+        if '=' in package:
+            package_name, package_version = package.split('=')
+            log_message(f"Attempting to download package: {package_name} version: {package_version}", download_log_file)
+            download_command = ["apt-get", "download", f"{package_name}={package_version}"]
+        else:
+            log_message(f"Attempting to download package: {package}", download_log_file)
+            download_command = ["apt-get", "download", package]
+
         try:
             result = subprocess.run(download_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             if result.returncode == 0:

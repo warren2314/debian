@@ -1,12 +1,11 @@
-# Use an argument for Ubuntu version
-ARG UBUNTU_VERSION=24.04
+# Use an argument for the Ubuntu version
+ARG UBUNTU_VERSION="22.04"
+
+# Set the base image according to the Ubuntu version
 FROM ubuntu:${UBUNTU_VERSION}
 
-# Set non-interactive mode for APT
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Install necessary tools including GnuPG and lsb-release
-RUN apt-get update && apt-get install -y \
+# Install necessary packages
+RUN apt-get update -y && apt-get install -y \
     apt-utils \
     apt-transport-https \
     ca-certificates \
@@ -15,43 +14,36 @@ RUN apt-get update && apt-get install -y \
     gnupg \
     lsb-release \
     software-properties-common \
-    python3 \
-    python3-pip \
     python3-venv \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    python3-pip
 
-# Create a directory for the app
-RUN mkdir -p /usr/src/app
-
-# Set working directory
+# Setup working directory
 WORKDIR /usr/src/app
 
-# Copy requirements.txt and install Python dependencies
-COPY requirements.txt ./
+# Copy necessary files including filenames.txt
+COPY main.py packages.txt repos.txt requirements.txt filenames.txt urls.txt ./
+
+# Make main.py executable (optional)
+#RUN chmod +x main.py
+
+# Install Python virtual environment
 RUN python3 -m venv venv && \
     ./venv/bin/pip install --upgrade pip && \
     ./venv/bin/pip install -r requirements.txt
 
-# Copy the application code
-COPY main.py packages.txt repos.txt ./
-
-# Ensure the script is executable
-RUN chmod +x main.py
-
-# Install ClamAV
+# Install ClamAV and Trivy
 RUN apt-get update && apt-get install -y clamav clamav-daemon && \
     sed -i 's/^Example/#Example/' /etc/clamav/freshclam.conf && \
     freshclam
 
-# Install Trivy
-RUN wget https://github.com/aquasecurity/trivy/releases/download/v0.55.1/trivy_0.55.1_Linux-64bit.deb && \
-    dpkg -i trivy_0.55.1_Linux-64bit.deb && \
-    rm trivy_0.55.1_Linux-64bit.deb && \
-    trivy image --download-db-only
+# Install Trivy with dynamic version
+ARG TRIVY_VERSION="0.55.1"
+RUN wget https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.deb && \
+    dpkg -i trivy_${TRIVY_VERSION}_Linux-64bit.deb && \
+    rm trivy_${TRIVY_VERSION}_Linux-64bit.deb
 
-# Create output directories
+# Ensure output directories exist
 RUN mkdir -p /mnt/output/deb_packages /mnt/output/sbom_results /mnt/output/trivy_results /mnt/output/logs
 
-# Set the command to execute your script
-CMD ["./venv/bin/python", "main.py"]
+# Set entrypoint to use Python virtual environment
+ENTRYPOINT ["./venv/bin/python", "./main.py"]

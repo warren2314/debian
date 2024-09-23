@@ -15,7 +15,8 @@ RUN apt-get update -y && apt-get install -y \
     lsb-release \
     software-properties-common \
     python3-venv \
-    python3-pip
+    python3-pip \
+    zstd
 
 # Setup working directory
 WORKDIR /usr/src/app

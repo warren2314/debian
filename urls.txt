@@ -1,1 +1,0 @@
-https://apt.postgresql.org/pub/repos/apt/pool/15/p/postgresql-15/libecpg-compat3-dbgsym_15.8-1.pgdg24.04+1_amd64.deb

@@ -16,7 +16,8 @@ RUN apt-get update -y && apt-get install -y \
     software-properties-common \
     python3-venv \
     python3-pip \
-    zstd
+    zstd \
+    apt-rdepends
 
 # Setup working directory
 WORKDIR /usr/src/app

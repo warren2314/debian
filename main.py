@@ -7,6 +7,7 @@ import threading
 import debian.debfile
 from openpyxl import Workbook
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import time  # Added for time.sleep in retries
 
 # Variables for directories and files
 output_dir = "/mnt/output"
@@ -34,6 +35,9 @@ ubuntu_version = os.getenv("UBUNTU_VERSION", "")
 download_mode = os.getenv("DOWNLOAD_MODE", "")
 download_file = os.getenv("DOWNLOAD_FILE", "")
 base_url = os.getenv("BASE_URL", "")
+
+# Initialize downloaded_packages set
+downloaded_packages = set()
 
 # Ensure all necessary directories exist
 def ensure_directories_exist():
@@ -74,8 +78,52 @@ def update_clamav_definitions():
     except Exception as e:
         log_message(f"Exception during ClamAV update: {e}", clamav_log_file)
 
-def download_all_packages(retries=3, wait=5):
-    """Download all packages listed in the package list file using apt-get download with retries."""
+def download_package_via_apt(package):
+    global downloaded_packages
+
+    log_message(f"******** Downloading {package} via APT ********", download_log_file)
+
+    pkg_name = package.split('=')[0]
+    result = subprocess.run(["apt-rdepends", pkg_name], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if result.returncode != 0:
+        log_message(f"Failed to get dependencies for {package}: {result.stderr}", download_log_file)
+        return
+
+    dependencies = set()
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line or line.startswith('Reading ') or line.startswith('Building ') or line.startswith('...'):
+            continue
+        if not line.startswith(' '):
+            dependencies.add(line)
+        elif 'Depends:' in line or 'PreDepends:' in line:
+            dep_line = line.split(':', 1)[1].strip()
+            dep_name = dep_line.split(' ', 1)[0].strip()
+            dependencies.add(dep_name)
+
+    for dep in dependencies:
+        if dep not in downloaded_packages:
+            log_message(f"Downloading {dep}...", download_log_file)
+            download_success = subprocess.run(
+                ["apt-get", "download", dep],
+                cwd=deb_packages_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True
+            )
+            if download_success.returncode == 0:
+                downloaded_packages.add(dep)
+                log_message(f"Downloaded {dep}", download_log_file)
+            else:
+                log_message(f"Failed to download {dep}. Skipping.", download_log_file)
+                log_message(download_success.stdout, download_log_file)
+        else:
+            log_message(f"{dep} is already downloaded", download_log_file)
+
+    log_message("******************************", download_log_file)
+
+def download_all_packages():
+    """Download all packages listed in the package list file, including dependencies."""
     if not os.path.exists(package_list_file):
         log_message(f"Package list file {package_list_file} does not exist.", download_log_file, "ERROR")
         return
@@ -97,67 +145,10 @@ def download_all_packages(retries=3, wait=5):
             repo_name = "Unknown"
             log_message(f"Processing package '{package_entry}' without specified repository", download_log_file, "WARNING")
 
-        # Check if package_entry has a version
-        if '=' in package_entry:
-            package, version = package_entry.split('=', 1)
-            package = package.strip()
-            version = version.strip()
-            package_version = f"{package}={version}"
-        else:
-            package = package_entry
-            package_version = package
+        # Call download_package_via_apt for each package
+        download_package_via_apt(package_entry)
 
-        log_message(f"Attempting to download package: {package_version}", download_log_file, "INFO")
-
-        for attempt in range(1, retries + 1):
-            try:
-                download_command = ["apt-get", "download", package_version]
-                result = subprocess.run(download_command, cwd=deb_packages_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                if result.returncode == 0:
-                    log_message(f"Successfully downloaded {package_version}", download_log_file, "INFO")
-                    break
-                else:
-                    log_message(f"Failed to download {package_version}: {result.stderr}", download_log_file, "ERROR")
-            except Exception as e:
-                log_message(f"Exception occurred while downloading {package_version}: {e}", download_log_file, "ERROR")
-
-            if attempt < retries:
-                log_message(f"Retrying download of {package_version} in {wait} seconds... (Attempt {attempt}/{retries})", download_log_file, "WARNING")
-                time.sleep(wait)
-            else:
-                log_message(f"Failed to download package {package_version} after {retries} attempts.", download_log_file, "ERROR")
-
-    move_deb_files()
     clean_apt_cache()
-
-def move_deb_files():
-    """Moves .deb files from APT cache and current directory to the output directory."""
-    apt_cache_dir = "/var/cache/apt/archives"
-
-    # Ensure the deb_packages directory exists
-    ensure_directories_exist()
-
-    # Move files from APT cache directory
-    for file in os.listdir(apt_cache_dir):
-        if file.endswith(".deb"):
-            src_file = os.path.join(apt_cache_dir, file)
-            dest_file = os.path.join(deb_packages_dir, file)
-            try:
-                shutil.move(src_file, dest_file)
-                log_message(f"Moved {src_file} to {dest_file}", download_log_file)
-            except Exception as e:
-                log_message(f"Failed to move {src_file} to {dest_file}: {str(e)}", download_log_file)
-
-    # Move files from current directory (if any)
-    for file in os.listdir('.'):
-        if file.endswith(".deb"):
-            src_file = os.path.join('.', file)
-            dest_file = os.path.join(deb_packages_dir, file)
-            try:
-                shutil.move(src_file, dest_file)
-                log_message(f"Moved {src_file} to {dest_file}", download_log_file)
-            except Exception as e:
-                log_message(f"Failed to move {src_file} to {dest_file}: {str(e)}", download_log_file)
 
 def clean_apt_cache():
     """Cleans the APT cache to free up space."""
@@ -350,9 +341,9 @@ def extract_deb_metadata(deb_file, metadata_list, metadata_lock):
 
         control = deb.debcontrol()  # Returns a Deb822 object
 
-        package_name = control.get('Package', 'N/A')
-        version = control.get('Version', 'N/A')
-        homepage_url = control.get('Homepage', 'N/A')  # Get the homepage URL if it exists
+        package_name = control.get('Package', '')
+        version = control.get('Version', '')
+        homepage_url = control.get('Homepage', '')  # Get the homepage URL if it exists
 
         # Initialize license_content
         license_type = ''  # Default if no license type is found
@@ -378,7 +369,7 @@ def extract_deb_metadata(deb_file, metadata_list, metadata_lock):
                     log_message(f"{license_name} license found for {package_name}", metadata_log_file)
                     break
 
-            if license_type == 'N/A':
+            if license_type == '':
                 log_message(f"No common license type found for {package_name}", metadata_log_file)
 
         except Exception as e:
@@ -402,7 +393,6 @@ def extract_deb_metadata(deb_file, metadata_list, metadata_lock):
     except Exception as e:
         log_message(f"Exception during metadata extraction from {deb_file}: {e}", metadata_log_file)
 
-
 def write_metadata_to_xlsx(metadata_list):
     """Write the collected metadata to an xlsx file."""
     xlsx_file = os.path.join(metadata_dir, "deb_metadata.xlsx")
@@ -424,7 +414,7 @@ def write_metadata_to_xlsx(metadata_list):
 
         # Write data rows
         for metadata in metadata_list:
-            row = [metadata.get(field, 'N/A') for field in headers]
+            row = [metadata.get(field, '') for field in headers]
             ws.append(row)
 
         wb.save(xlsx_file)
@@ -468,3 +458,4 @@ if __name__ == "__main__":
     write_metadata_to_xlsx(metadata_list)
 
     log_message("Processing completed. Check the logs for details.", download_log_file)
+

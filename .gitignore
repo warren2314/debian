@@ -16,3 +16,5 @@ download_log.txt
 warren.txt
 warren_cleaned.txt
 output/
+.env
+generate_llm_report.py

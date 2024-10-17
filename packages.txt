@@ -1,1 +1,1 @@
-apt,graphviz
+apt,gdisk==1.0.5-1

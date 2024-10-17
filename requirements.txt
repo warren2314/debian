@@ -1,3 +1,5 @@
 requests
 python-debian
 openpyxl
+fpdf
+openai==0.28

@@ -8,6 +8,8 @@ import debian.debfile
 from openpyxl import Workbook
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time  # Added for time.sleep in retries
+import json
+import openai
 
 # Variables for directories and files
 output_dir = "/mnt/output"
@@ -39,6 +41,7 @@ base_url = os.getenv("BASE_URL", "")
 # Initialize downloaded_packages set
 downloaded_packages = set()
 
+
 # Ensure all necessary directories exist
 def ensure_directories_exist():
     """Ensure all necessary directories exist."""
@@ -48,7 +51,9 @@ def ensure_directories_exist():
             os.makedirs(directory, exist_ok=True)
             os.chmod(directory, 0o777)  # Ensure directories are writable
 
+
 ensure_directories_exist()
+
 
 def log_message(message, log_file, level="INFO"):
     """Logs messages to the appropriate log file with timestamps and log levels."""
@@ -56,6 +61,7 @@ def log_message(message, log_file, level="INFO"):
     with open(log_file, 'a', encoding='utf-8') as log:
         log.write(f"{timestamp} - {level} - {message}\n")
     print(f"{timestamp} - {level} - {message}")
+
 
 def update_package_lists():
     """Updates the package lists."""
@@ -65,6 +71,7 @@ def update_package_lists():
         log_message("Package lists updated.", download_log_file)
     else:
         log_message(f"Failed to update package lists: {update_command.stdout}", download_log_file)
+
 
 def update_clamav_definitions():
     """Updates ClamAV virus definitions."""
@@ -77,6 +84,7 @@ def update_clamav_definitions():
             log_message(f"Failed to update ClamAV definitions: {result.stderr}", clamav_log_file)
     except Exception as e:
         log_message(f"Exception during ClamAV update: {e}", clamav_log_file)
+
 
 def download_package_via_apt(package):
     global downloaded_packages
@@ -122,6 +130,7 @@ def download_package_via_apt(package):
 
     log_message("******************************", download_log_file)
 
+
 def download_all_packages():
     """Download all packages listed in the package list file, including dependencies."""
     if not os.path.exists(package_list_file):
@@ -139,16 +148,19 @@ def download_all_packages():
             repo_name, package_entry = parts
             repo_name = repo_name.strip()
             package_entry = package_entry.strip()
-            log_message(f"Processing package '{package_entry}' from repository '{repo_name}'", download_log_file, "INFO")
+            log_message(f"Processing package '{package_entry}' from repository '{repo_name}'", download_log_file,
+                        "INFO")
         else:
             package_entry = parts[0].strip()
             repo_name = "Unknown"
-            log_message(f"Processing package '{package_entry}' without specified repository", download_log_file, "WARNING")
+            log_message(f"Processing package '{package_entry}' without specified repository", download_log_file,
+                        "WARNING")
 
         # Call download_package_via_apt for each package
         download_package_via_apt(package_entry)
 
     clean_apt_cache()
+
 
 def clean_apt_cache():
     """Cleans the APT cache to free up space."""
@@ -158,6 +170,7 @@ def clean_apt_cache():
         log_message("APT cache cleaned.", download_log_file)
     else:
         log_message(f"Failed to clean APT cache: {clean_command.stdout.decode()}", download_log_file)
+
 
 def download_packages_from_urls(urls_filename):
     """Download deb packages directly from URLs listed in the specified file."""
@@ -179,6 +192,7 @@ def download_packages_from_urls(urls_filename):
                 log_message(f"Failed to download package from {url}: {result.stderr}", download_log_file)
         except Exception as e:
             log_message(f"Exception occurred while downloading from {url}: {e}", download_log_file)
+
 
 def download_packages_from_filenames(filenames_file):
     """Download deb packages by constructing URLs from filenames and a base URL."""
@@ -206,6 +220,7 @@ def download_packages_from_filenames(filenames_file):
                 log_message(f"Failed to download package from {full_url}: {result.stderr}", download_log_file)
         except Exception as e:
             log_message(f"Exception occurred while downloading from {full_url}: {e}", download_log_file)
+
 
 # Restored `add_repositories` function
 def add_repositories():
@@ -251,6 +266,7 @@ def add_repositories():
         except Exception as e:
             log_message(f"Error adding repository {repo_name}: {e}", download_log_file)
 
+
 def insert_signed_by(repo_entry, keyring_path):
     """Inserts the signed-by option into the repo_entry correctly."""
     match = re.match(r'^(deb(?:-src)?)(\s+\[.*?\])?(\s+\S+.*)$', repo_entry)
@@ -272,6 +288,7 @@ def insert_signed_by(repo_entry, keyring_path):
         log_message(f"Failed to parse repo entry: {repo_entry}. Skipping signed-by insertion.", download_log_file)
         return repo_entry  # Return unmodified entry without signed-by
 
+
 def process_deb_file(deb_file, metadata_list, metadata_lock):
     """Process a .deb file: Generate SBOM, Trivy scan, ClamAV scan, Extract metadata."""
     full_deb_path = os.path.join(deb_packages_dir, deb_file)
@@ -280,6 +297,7 @@ def process_deb_file(deb_file, metadata_list, metadata_lock):
     scan_sbom_with_trivy(sbom_file)
     scan_with_clamav(deb_file)
     extract_deb_metadata(full_deb_path, metadata_list, metadata_lock)
+
 
 def generate_sbom_with_trivy(deb_file):
     """Generate SBOM for a .deb file using Trivy."""
@@ -296,9 +314,11 @@ def generate_sbom_with_trivy(deb_file):
     except Exception as e:
         log_message(f"Exception during SBOM generation: {e}", sbom_log_file)
 
+
 def scan_sbom_with_trivy(sbom_file):
     """Scan SBOM for vulnerabilities using Trivy."""
-    result_file = os.path.join(trivy_results_dir, os.path.basename(sbom_file).replace('.cyclonedx.json', '-trivy-result.json'))
+    result_file = os.path.join(trivy_results_dir,
+                               os.path.basename(sbom_file).replace('.cyclonedx.json', '-trivy-result.json'))
     trivy_command = ["trivy", "sbom", "--format", "json", "--output", result_file, sbom_file]
 
     log_message(f"Running Trivy scan on {sbom_file}", trivy_log_file)
@@ -311,6 +331,7 @@ def scan_sbom_with_trivy(sbom_file):
             log_message(f"Trivy scan failed for {sbom_file}: {result.stderr}", trivy_log_file)
     except Exception as e:
         log_message(f"Exception during Trivy scan: {e}", trivy_log_file)
+
 
 def scan_with_clamav(deb_file):
     """Scan a .deb file using ClamAV."""
@@ -328,6 +349,7 @@ def scan_with_clamav(deb_file):
             log_message(f"ClamAV scan error for {deb_file}: {result.stderr}", clamav_log_file)
     except Exception as e:
         log_message(f"Exception during ClamAV scan of {deb_file}: {e}", clamav_log_file)
+
 
 # Metadata extraction and xlsx writing functions
 def extract_deb_metadata(deb_file, metadata_list, metadata_lock):
@@ -393,6 +415,7 @@ def extract_deb_metadata(deb_file, metadata_list, metadata_lock):
     except Exception as e:
         log_message(f"Exception during metadata extraction from {deb_file}: {e}", metadata_log_file)
 
+
 def write_metadata_to_xlsx(metadata_list):
     """Write the collected metadata to an xlsx file."""
     xlsx_file = os.path.join(metadata_dir, "deb_metadata.xlsx")
@@ -422,6 +445,103 @@ def write_metadata_to_xlsx(metadata_list):
     except Exception as e:
         log_message(f"Exception during writing metadata to xlsx file: {e}", metadata_log_file)
 
+
+def run_llm_analysis(input_text):
+    """Run LLM analysis on the provided input text."""
+    openai.api_key = os.getenv("OPENAI_API_KEY")
+
+    try:
+        response = openai.Completion.create(
+            engine="text-davinci-003",
+            prompt=input_text,
+            max_tokens=1000
+        )
+        return response.choices[0].text.strip()
+    except Exception as e:
+        log_message(f"LLM analysis failed: {e}", download_log_file, level="ERROR")
+        return ""
+
+
+def collect_trivy_results():
+    """Collect Trivy results from the output files."""
+    trivy_results = []
+    for filename in os.listdir(trivy_results_dir):
+        if filename.endswith("-trivy-result.json"):
+            result_file = os.path.join(trivy_results_dir, filename)
+            with open(result_file, 'r', encoding='utf-8') as file:
+                trivy_data = json.load(file)
+                for result in trivy_data.get('Results', []):
+                    vulnerabilities = result.get('Vulnerabilities', [])
+                    for vulnerability in vulnerabilities:
+                        trivy_results.append({
+                            "package": result.get('Target', 'unknown'),
+                            "vulnerabilities": len(vulnerabilities),
+                            "severity": vulnerability.get('Severity', 'unknown')
+                        })
+    return trivy_results
+
+def collect_clamav_results():
+    """Collect ClamAV results from the ClamAV log file."""
+    clamav_results = []
+    with open(clamav_log_file, 'r', encoding='utf-8') as file:
+        for line in file:
+            if "FOUND" in line:
+                parts = line.split(":")
+                clamav_results.append({
+                    "file": parts[0].strip(),
+                    "status": parts[1].strip()
+                })
+    return clamav_results
+
+
+def generate_llm_report(metadata_list, trivy_results, clamav_results):
+    """Generates a detailed markdown report using GPT chat-based models."""
+    prompt = f"""
+    You are a security analysis assistant tasked with providing a report on vulnerabilities and threats detected during a scan. 
+    The report should be clear, detailed, and actionable for a junior application security specialist. The format should be in markdown.
+
+    ## Overview
+    - Total packages processed: {len(metadata_list)}
+    - Total vulnerabilities found by Trivy: {len(trivy_results)}
+    - Total threats found by ClamAV: {len(clamav_results)}
+
+    ## Tool Results Breakdown
+    ### Trivy Results:
+    """
+    for result in trivy_results:
+        prompt += f"- **{result['package']}**: {result['vulnerabilities']} vulnerabilities, Severity: {result['severity']}\n"
+
+    prompt += "\n### ClamAV Results:\n"
+    for result in clamav_results:
+        prompt += f"- **{result['file']}**: {result['status']}\n"
+
+    prompt += """
+    ## Critical Issues:
+    Please list any critical vulnerabilities identified during the scan. If no critical issues were found, explain what this means for the security posture.
+
+    ## Recommended Actions:
+    Provide clear, actionable steps to address the vulnerabilities and improve the security posture.
+
+    ## Final Summary:
+    Summarize the overall health of the system and the next steps that should be taken.
+    """
+
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4",  # or use "gpt-3.5-turbo"
+            messages=[
+                {"role": "system", "content": "You are a security analysis assistant."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=1500,
+            temperature=0.7
+        )
+        report = response['choices'][0]['message']['content'].strip()
+        with open("/mnt/output/analysis_report.md", "w", encoding="utf-8") as report_file:
+            report_file.write(report)
+        print("LLM report generated successfully.")
+    except Exception as e:
+        print(f"Error generating report with GPT: {e}")
 
 # Main script logic
 if __name__ == "__main__":
@@ -457,5 +577,11 @@ if __name__ == "__main__":
     # After processing all deb files, write metadata to xlsx
     write_metadata_to_xlsx(metadata_list)
 
-    log_message("Processing completed. Check the logs for details.", download_log_file)
+    # Collect Trivy and ClamAV results
+    trivy_results = collect_trivy_results()
+    clamav_results = collect_clamav_results()
 
+    # Run LLM analysis on SBOM and Trivy results
+    generate_llm_report(metadata_list, trivy_results, clamav_results)
+
+    log_message("Processing completed. Check the logs for details.", download_log_file)

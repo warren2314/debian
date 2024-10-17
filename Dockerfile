@@ -23,12 +23,9 @@ RUN apt-get update -y && apt-get install -y \
 WORKDIR /usr/src/app
 
 # Copy necessary files including filenames.txt
-COPY main.py packages.txt repos.txt requirements.txt filenames.txt urls.txt ./
+COPY main.py generate_llm_report.py packages.txt repos.txt requirements.txt filenames.txt urls.txt ./
 
-# Make main.py executable (optional)
-#RUN chmod +x main.py
-
-# Install Python virtual environment
+# Install Python virtual environment and dependencies
 RUN python3 -m venv venv && \
     ./venv/bin/pip install --upgrade pip && \
     ./venv/bin/pip install -r requirements.txt
@@ -47,5 +44,5 @@ RUN wget https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSIO
 # Ensure output directories exist
 RUN mkdir -p /mnt/output/deb_packages /mnt/output/sbom_results /mnt/output/trivy_results /mnt/output/logs
 
-# Set entrypoint to use Python virtual environment
-ENTRYPOINT ["./venv/bin/python", "./main.py"]
+# Set entrypoint to use Python virtual environment and execute both scripts
+ENTRYPOINT ["./venv/bin/python", "-u", "./main.py", "&&", "./venv/bin/python", "./generate_llm_report.py", "/mnt/output/sbom_results", "/mnt/output/trivy_results", "/mnt/output/final_report.pdf"]

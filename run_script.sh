@@ -11,21 +11,21 @@ select_ubuntu_version() {
 
     case "$version_choice" in
         1)
-            UBUNTU_VERSION="22.04"
+            ubuntu_version="22.04"
             ;;
         2)
-            UBUNTU_VERSION="24.04"
+            ubuntu_version="24.04"
             ;;
         3)
-            UBUNTU_VERSION="24.10"
+            ubuntu_version="24.10"
             ;;
         *)
             echo "Invalid selection. Defaulting to Ubuntu 22.04."
-            UBUNTU_VERSION="22.04"
+            ubuntu_version="22.04"
             ;;
     esac
 
-    echo "Selected Ubuntu version: $UBUNTU_VERSION"
+    echo "Selected Ubuntu version: $ubuntu_version"
 }
 
 # Function to display the main menu
@@ -39,8 +39,8 @@ main_menu() {
 
 # Function to set up the output directory
 setup_output_directory() {
-    OUTPUT_DIR="./output"
-    mkdir -p "$OUTPUT_DIR/logs" "$OUTPUT_DIR/deb_packages" "$OUTPUT_DIR/sbom_results" "$OUTPUT_DIR/trivy_results"
+    output_dir="./output"
+    mkdir -p "$output_dir/logs" "$output_dir/deb_packages" "$output_dir/sbom_results" "$output_dir/trivy_results"
 }
 
 # Main script execution
@@ -52,7 +52,7 @@ case "$download_choice" in
         # Download via apt-get from repositories
         setup_output_directory
         rm -f urls.txt filenames.txt  # Ensure these are not used
-        export DOWNLOAD_MODE="REPO"
+        export download_mode="REPO"
 
         # Create empty filenames.txt and urls.txt to satisfy Dockerfile COPY
         touch filenames.txt
@@ -68,8 +68,8 @@ case "$download_choice" in
         fi
         cp "$urls_file" urls.txt
         setup_output_directory
-        export DOWNLOAD_MODE="URL"
-        export DOWNLOAD_FILE="urls.txt"
+        export download_mode="URL"
+        export download_file="urls.txt"
         ;;
     3)
         # Direct download using filenames with a base URL
@@ -79,16 +79,16 @@ case "$download_choice" in
             echo "Filenames file '$filenames_file' does not exist."
             exit 1
         fi
-        read -p "Enter the base URL for downloading packages: " BASE_URL
-        if [ -z "$BASE_URL" ]; then
+        read -p "Enter the base URL for downloading packages: " base_url
+        if [ -z "$base_url" ]; then
             echo "Base URL cannot be empty."
             exit 1
         fi
-        export BASE_URL="$BASE_URL"
+        export base_url="$base_url"
         # No need to copy filenames.txt to itself
         setup_output_directory
-        export DOWNLOAD_MODE="FILENAME"
-        export DOWNLOAD_FILE="filenames.txt"
+        export download_mode="FILENAME"
+        export download_file="filenames.txt"
         ;;
     *)
         echo "Invalid selection."
@@ -97,11 +97,12 @@ case "$download_choice" in
 esac
 
 # Build the Docker image, passing the Ubuntu version
-echo "Building Docker image with Ubuntu version $UBUNTU_VERSION..."
-docker build --build-arg UBUNTU_VERSION="$UBUNTU_VERSION" -t download-script .
+echo "Building Docker image with Ubuntu version $ubuntu_version..."
+docker build --build-arg UBUNTU_VERSION="$ubuntu_version" -t download-script .
 
 # Run the Docker container with mounted output directory
 docker run -it --rm -v "$(pwd)/output":/mnt/output \
+    --env-file .env \
     -e UBUNTU_VERSION="$UBUNTU_VERSION" \
     -e DOWNLOAD_MODE="$DOWNLOAD_MODE" \
     -e DOWNLOAD_FILE="$DOWNLOAD_FILE" \

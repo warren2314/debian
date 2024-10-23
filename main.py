@@ -7,7 +7,11 @@ import threading
 import debian.debfile
 from openpyxl import Workbook
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import openai
+import json
 import time  # Added for time.sleep in retries
+
+openai.api_key = os.environ['OPENAI_API_KEY']
 
 # Variables for directories and files
 output_dir = "/mnt/output"
@@ -207,70 +211,6 @@ def download_packages_from_filenames(filenames_file):
         except Exception as e:
             log_message(f"Exception occurred while downloading from {full_url}: {e}", download_log_file)
 
-# Restored `add_repositories` function
-def add_repositories():
-    """Adds repositories from repos.txt and handles GPG keys securely, supporting custom codenames."""
-    if not os.path.exists(repo_list_file):
-        log_message(f"Repository list file {repo_list_file} does not exist.", download_log_file)
-        return
-
-    with open(repo_list_file, 'r', encoding='utf-8') as f:
-        repos = [line.strip() for line in f if line.strip() and not line.startswith('#')]
-
-    try:
-        system_codename = subprocess.check_output(["lsb_release", "-cs"], text=True).strip()
-    except subprocess.CalledProcessError as e:
-        log_message(f"Error obtaining Ubuntu codename: {e}", download_log_file)
-        return
-
-    for repo_line in repos:
-        try:
-            parts = repo_line.split(',', 3)
-            repo_name = parts[0]
-            repo_entry = parts[1]
-            gpg_key_url = parts[2] if len(parts) > 2 else None
-            custom_codename = parts[3] if len(parts) > 3 else system_codename
-
-            log_message(f"Adding repository: {repo_name}", download_log_file)
-
-            repo_entry = repo_entry.replace("$(lsb_release -cs)", custom_codename)
-
-            keyring_path = f"/usr/share/keyrings/{repo_name}-archive-keyring.gpg"
-            if gpg_key_url:
-                log_message(f"Adding GPG key for {repo_name} from {gpg_key_url}", download_log_file)
-                subprocess.run(["wget", "-O", keyring_path, gpg_key_url], check=True)
-            else:
-                log_message(f"No GPG key URL provided for {repo_name}", download_log_file)
-
-            if gpg_key_url:
-                repo_entry = insert_signed_by(repo_entry, keyring_path)
-
-            sources_list_file = f"/etc/apt/sources.list.d/{repo_name}.list"
-            with open(sources_list_file, 'w', encoding='utf-8') as src_file:
-                src_file.write(f"{repo_entry}\n")
-        except Exception as e:
-            log_message(f"Error adding repository {repo_name}: {e}", download_log_file)
-
-def insert_signed_by(repo_entry, keyring_path):
-    """Inserts the signed-by option into the repo_entry correctly."""
-    match = re.match(r'^(deb(?:-src)?)(\s+\[.*?\])?(\s+\S+.*)$', repo_entry)
-    if match:
-        repo_type = match.group(1)
-        options = match.group(2)
-        rest = match.group(3)
-
-        if options:
-            options_content = options.strip()[1:-1].strip()
-            options_list = options_content.split()
-        else:
-            options_list = []
-
-        options_list.append(f"signed-by={keyring_path}")
-        options_str = f" [ {' '.join(options_list)} ]"
-        return f"{repo_type}{options_str}{rest}"
-    else:
-        log_message(f"Failed to parse repo entry: {repo_entry}. Skipping signed-by insertion.", download_log_file)
-        return repo_entry  # Return unmodified entry without signed-by
 
 def process_deb_file(deb_file, metadata_list, metadata_lock):
     """Process a .deb file: Generate SBOM, Trivy scan, ClamAV scan, Extract metadata."""
@@ -423,6 +363,108 @@ def write_metadata_to_xlsx(metadata_list):
         log_message(f"Exception during writing metadata to xlsx file: {e}", metadata_log_file)
 
 
+def generate_llm_report(metadata_list, trivy_results, clamav_results):
+    """Generates a detailed markdown report using GPT chat-based models."""
+
+    # Create a structured prompt for the GPT model
+    prompt = f"""
+    You are a security analysis assistant tasked with providing a report on vulnerabilities and threats detected during a scan. 
+    The report should be clear, detailed, and actionable for a junior application security specialist. The format should be in markdown.
+
+    ## Overview
+    - Total packages processed: {len(metadata_list)}
+    - Total vulnerabilities found by Trivy: {len(trivy_results)}
+    - Total threats found by ClamAV: {len(clamav_results)}
+
+    ## Tool Results Breakdown
+    ### Trivy Results:
+    """
+
+    # Add Trivy results to the prompt
+    for result in trivy_results:
+        prompt += f"- **{result['package']}**: {result['vulnerabilities']} vulnerabilities, Severity: {result['severity']}\n"
+
+    prompt += "\n### ClamAV Results:\n"
+
+    # Add ClamAV results to the prompt
+    for result in clamav_results:
+        prompt += f"- **{result['file']}**: {result['status']}\n"
+
+    prompt += """
+    ## Critical Issues:
+    Please list any critical vulnerabilities identified during the scan. If no critical issues were found, explain what this means for the security posture.
+
+    ## Recommended Actions:
+    Provide clear, actionable steps to address the vulnerabilities and improve the security posture.
+
+    ## Final Summary:
+    Summarize the overall health of the system and the next steps that should be taken.
+    """
+
+    # Call the OpenAI Chat API (updated endpoint for chat models)
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4",  # or use "gpt-3.5-turbo"
+            messages=[
+                {"role": "system", "content": "You are a security analysis assistant."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=1500,  # Adjust this based on your needs
+            temperature=0.7
+        )
+
+        # Extract the generated report from the response
+        report = response['choices'][0]['message']['content'].strip()
+
+        # Save the report to a markdown file
+        with open("/mnt/output/analysis_report.md", "w", encoding="utf-8") as report_file:
+            report_file.write(report)
+
+        print("LLM report generated successfully.")
+    except Exception as e:
+        print(f"Error generating report with GPT: {e}")
+
+def collect_trivy_results():
+    """Collect Trivy results from the output files."""
+    trivy_results = []
+
+    # Iterate through all JSON files in the trivy_results_dir
+    for filename in os.listdir(trivy_results_dir):
+        if filename.endswith("-trivy-result.json"):
+            result_file = os.path.join(trivy_results_dir, filename)
+            with open(result_file, 'r', encoding='utf-8') as file:
+                trivy_data = json.load(file)
+
+                # Extract relevant data from the Trivy scan (adjust according to your Trivy output format)
+                for result in trivy_data.get('Results', []):
+                    vulnerabilities = result.get('Vulnerabilities', [])
+                    for vulnerability in vulnerabilities:
+                        trivy_results.append({
+                            "package": result.get('Target', 'unknown'),
+                            "vulnerabilities": len(vulnerabilities),
+                            "severity": vulnerability.get('Severity', 'unknown')
+                        })
+
+    return trivy_results
+
+
+def collect_clamav_results():
+    """Collect ClamAV results from the ClamAV log file."""
+    clamav_results = []
+
+    # Read the ClamAV log file and extract relevant details
+    with open(clamav_log_file, 'r', encoding='utf-8') as file:
+        for line in file:
+            if "FOUND" in line:
+                # Parse the infected file and the threat type
+                parts = line.split(":")
+                clamav_results.append({
+                    "file": parts[0].strip(),
+                    "status": parts[1].strip()
+                })
+
+    return clamav_results
+
 # Main script logic
 if __name__ == "__main__":
     # Log the selected Ubuntu version for reference
@@ -434,7 +476,6 @@ if __name__ == "__main__":
     elif download_mode == "FILENAME":
         download_packages_from_filenames(download_file)
     else:
-        add_repositories()
         update_package_lists()
         download_all_packages()
 
@@ -456,6 +497,13 @@ if __name__ == "__main__":
 
     # After processing all deb files, write metadata to xlsx
     write_metadata_to_xlsx(metadata_list)
+
+    # Collect Trivy and ClamAV results
+    trivy_results = collect_trivy_results()
+    clamav_results = collect_clamav_results()
+
+    # Generate the LLM report after all deb files have been processed
+    generate_llm_report(metadata_list, trivy_results, clamav_results)
 
     log_message("Processing completed. Check the logs for details.", download_log_file)
 

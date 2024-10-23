@@ -369,8 +369,7 @@ if __name__ == "__main__":
         download_packages_from_urls(download_file)
     elif download_mode == "FILENAME":
         download_packages_from_filenames(download_file)
-    else:
-        add_repositories()
+    else:      
         update_package_lists()
         download_all_packages()
 

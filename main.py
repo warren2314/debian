@@ -7,7 +7,11 @@ import threading
 import debian.debfile
 from openpyxl import Workbook
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import openai
+import json
 import time  # Added for time.sleep in retries
+
+openai.api_key = os.environ['OPENAI_API_KEY']
 
 # Variables for directories and files
 output_dir = "/mnt/output"
@@ -359,6 +363,108 @@ def write_metadata_to_xlsx(metadata_list):
         log_message(f"Exception during writing metadata to xlsx file: {e}", metadata_log_file)
 
 
+def generate_llm_report(metadata_list, trivy_results, clamav_results):
+    """Generates a detailed markdown report using GPT chat-based models."""
+
+    # Create a structured prompt for the GPT model
+    prompt = f"""
+    You are a security analysis assistant tasked with providing a report on vulnerabilities and threats detected during a scan. 
+    The report should be clear, detailed, and actionable for a junior application security specialist. The format should be in markdown.
+
+    ## Overview
+    - Total packages processed: {len(metadata_list)}
+    - Total vulnerabilities found by Trivy: {len(trivy_results)}
+    - Total threats found by ClamAV: {len(clamav_results)}
+
+    ## Tool Results Breakdown
+    ### Trivy Results:
+    """
+
+    # Add Trivy results to the prompt
+    for result in trivy_results:
+        prompt += f"- **{result['package']}**: {result['vulnerabilities']} vulnerabilities, Severity: {result['severity']}\n"
+
+    prompt += "\n### ClamAV Results:\n"
+
+    # Add ClamAV results to the prompt
+    for result in clamav_results:
+        prompt += f"- **{result['file']}**: {result['status']}\n"
+
+    prompt += """
+    ## Critical Issues:
+    Please list any critical vulnerabilities identified during the scan. If no critical issues were found, explain what this means for the security posture.
+
+    ## Recommended Actions:
+    Provide clear, actionable steps to address the vulnerabilities and improve the security posture.
+
+    ## Final Summary:
+    Summarize the overall health of the system and the next steps that should be taken.
+    """
+
+    # Call the OpenAI Chat API (updated endpoint for chat models)
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4",  # or use "gpt-3.5-turbo"
+            messages=[
+                {"role": "system", "content": "You are a security analysis assistant."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=1500,  # Adjust this based on your needs
+            temperature=0.7
+        )
+
+        # Extract the generated report from the response
+        report = response['choices'][0]['message']['content'].strip()
+
+        # Save the report to a markdown file
+        with open("/mnt/output/analysis_report.md", "w", encoding="utf-8") as report_file:
+            report_file.write(report)
+
+        print("LLM report generated successfully.")
+    except Exception as e:
+        print(f"Error generating report with GPT: {e}")
+
+def collect_trivy_results():
+    """Collect Trivy results from the output files."""
+    trivy_results = []
+
+    # Iterate through all JSON files in the trivy_results_dir
+    for filename in os.listdir(trivy_results_dir):
+        if filename.endswith("-trivy-result.json"):
+            result_file = os.path.join(trivy_results_dir, filename)
+            with open(result_file, 'r', encoding='utf-8') as file:
+                trivy_data = json.load(file)
+
+                # Extract relevant data from the Trivy scan (adjust according to your Trivy output format)
+                for result in trivy_data.get('Results', []):
+                    vulnerabilities = result.get('Vulnerabilities', [])
+                    for vulnerability in vulnerabilities:
+                        trivy_results.append({
+                            "package": result.get('Target', 'unknown'),
+                            "vulnerabilities": len(vulnerabilities),
+                            "severity": vulnerability.get('Severity', 'unknown')
+                        })
+
+    return trivy_results
+
+
+def collect_clamav_results():
+    """Collect ClamAV results from the ClamAV log file."""
+    clamav_results = []
+
+    # Read the ClamAV log file and extract relevant details
+    with open(clamav_log_file, 'r', encoding='utf-8') as file:
+        for line in file:
+            if "FOUND" in line:
+                # Parse the infected file and the threat type
+                parts = line.split(":")
+                clamav_results.append({
+                    "file": parts[0].strip(),
+                    "status": parts[1].strip()
+                })
+
+    return clamav_results
+
 # Main script logic
 if __name__ == "__main__":
     # Log the selected Ubuntu version for reference
@@ -391,6 +497,13 @@ if __name__ == "__main__":
 
     # After processing all deb files, write metadata to xlsx
     write_metadata_to_xlsx(metadata_list)
+
+    # Collect Trivy and ClamAV results
+    trivy_results = collect_trivy_results()
+    clamav_results = collect_clamav_results()
+
+    # Generate the LLM report after all deb files have been processed
+    generate_llm_report(metadata_list, trivy_results, clamav_results)
 
     log_message("Processing completed. Check the logs for details.", download_log_file)
 

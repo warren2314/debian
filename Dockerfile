@@ -23,7 +23,13 @@ RUN apt-get update -y && apt-get install -y \
 WORKDIR /usr/src/app
 
 # Copy necessary files including filenames.txt
-COPY main.py packages.txt repos.txt requirements.txt filenames.txt urls.txt ./
+COPY main.py packages.txt repos.txt requirements.txt filenames.txt urls.txt repos.sh ./
+
+# Make repos.sh executable
+RUN chmod +x repos.sh
+
+# Run repos.sh file
+RUN ./repos.sh
 
 # Make main.py executable (optional)
 #RUN chmod +x main.py
